@@ -5,15 +5,117 @@ import matplotlib.pyplot as plt
 from scipy import signal as sp_signal, fft
 
 
-# ==========================================
 # Допоміжна функція для збереження графіка
-# ==========================================
 def save_figure(fig, file_name, figures_dir, dpi_value=600):
     """
     Зберігає рисунок у папку figures.
     """
     fig.savefig(os.path.join(figures_dir, file_name + ".png"), dpi=dpi_value)
     plt.close(fig)
+
+
+def quantize_signal(signal, M):
+    """
+    Квантування сигналу на M рівнів.
+    """
+    signal_min = np.min(signal)
+    signal_max = np.max(signal)
+
+    delta = (signal_max - signal_min) / (M - 1)
+
+    # Індекси рівнів квантування
+    q_index = np.round((signal - signal_min) / delta).astype(int)
+    q_index = np.clip(q_index, 0, M - 1)
+
+    # Квантований сигнал
+    q_signal = signal_min + q_index * delta
+
+    return q_signal, q_index, delta, signal_min, signal_max
+
+
+def build_quantization_table(M, signal_min, delta):
+    """
+    Формує таблицю квантування.
+    """
+    amplitudes = signal_min + np.arange(M) * delta
+    n_bits = int(np.log2(M))
+    codes = [format(i, f"0{n_bits}b") for i in range(M)]
+
+    return amplitudes, codes
+
+
+def build_bit_sequence(q_index, n_bits):
+    """
+    Формує бітову послідовність із індексів рівнів.
+    """
+    bit_string_list = [format(i, f"0{n_bits}b") for i in q_index]
+    bit_sequence_str = "".join(bit_string_list)
+    bit_sequence = np.array([int(bit) for bit in bit_sequence_str], dtype=int)
+
+    return bit_sequence, bit_sequence_str
+
+
+def plot_quant_table(amplitudes, codes, M, figures_dir, width_cm, height_cm, font_size, dpi_value):
+    """
+    Побудова таблиці квантування без розбиття на частини.
+    """
+    title = f"Таблиця квантування для M = {M}"
+
+    if M <= 16:
+        fig_w, fig_h = 12, 8
+        table_font = 10
+        y_scale = 1.4
+    elif M == 64:
+        fig_w, fig_h = 12, 16
+        table_font = 8
+        y_scale = 1.0
+    else:  # M == 256
+        fig_w, fig_h = 12, 36
+        table_font = 6
+        y_scale = 0.75
+
+    table_data = []
+    for i in range(len(amplitudes)):
+        table_data.append([f"{amplitudes[i]:.4f}", codes[i]])
+
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    ax.axis("off")
+
+    table = ax.table(
+        cellText=table_data,
+        colLabels=["Значення сигналу", "Кодова послідовність"],
+        cellLoc="center",
+        colLoc="center",
+        bbox=[0.03, 0.02, 0.94, 0.94]
+    )
+
+    table.auto_set_font_size(False)
+    table.set_fontsize(table_font)
+    table.scale(1, y_scale)
+
+    ax.set_title(title, fontsize=font_size, pad=10)
+
+    save_figure(fig, title, figures_dir, 300)
+
+
+def plot_bit_sequence(bit_sequence, M, figures_dir, width_cm, height_cm, font_size, line_width, dpi_value):
+    """
+    Побудова графіка бітової послідовності.
+    """
+    title = f"Кодова послідовність сигналу при кількості рівнів квантування {M}"
+
+    fig, ax = plt.subplots(figsize=(width_cm / 2.54, height_cm / 2.54))
+
+    x = np.arange(len(bit_sequence))
+    ax.bar(x, bit_sequence, width=1.0)
+
+    ax.set_xlabel("Біти", fontsize=font_size)
+    ax.set_ylabel("Амплітуда сигналу", fontsize=font_size)
+    ax.set_title(title, fontsize=font_size)
+    ax.set_ylim(0, 1.05)
+    ax.grid(True)
+
+    save_figure(fig, title, figures_dir, dpi_value)
 
 
 # Головна функція
@@ -24,6 +126,7 @@ def main():
     F_max = 7               # Максимальна частота сигналу, Гц
     F_filter = 14           # Полоса пропуску фільтра для відновлення, Гц
     Dt_values = [2, 4, 8, 16]  # Кроки дискретизації.
+    M_values = [4, 16, 64, 256] # кількість рівнів квантування
 
     # Параметри оформлення графіків
     width_cm = 21
@@ -90,8 +193,8 @@ def main():
     discrete_spectrums = []       # Спектри дискретизованих сигналів
     discrete_freqs_shifted = []   # Частотні осі для спектрів дискретизованих сигналів
     restored_signals = []         # Відновлені аналогові сигнали після ФНЧ
-    variance_errors = []          # Дисперсії різниці (похибки)
-    snr_ratios = []               # Співвідношення сигнал-шум (відношення дисперсій)
+    variance_errors_dt = []          # Дисперсії різниці (похибки)
+    snr_ratios_dt = []               # Співвідношення сигнал-шум (відношення дисперсій)
 
     # Розрахунок параметрів ФНЧ для відновлення сигналу
     # Нормована частота фільтра відновлення: w = F_filter / (Fs / 2)
@@ -147,8 +250,8 @@ def main():
             snr_value = var_signal / var_error
 
         # Зберігаємо результати
-        variance_errors.append(var_error)
-        snr_ratios.append(snr_value)
+        variance_errors_dt.append(var_error)
+        snr_ratios_dt.append(snr_value)
 
     # Відображення дискретизованих сигналів (2x2)
     title_discrete = "Сигнал з кроком дискретизації Dt = (2, 4, 8, 16)"
@@ -204,11 +307,11 @@ def main():
 
     save_figure(fig5, title_restored, figures_dir, dpi_value)
 
-    # Графік залежності дисперсії від кроку дискретизації
+    # Графік залежності дисперсії від кроку дискретизації ПЗ-3
     title_var = "Залежність дисперсії від кроку дискретизації"
 
     fig6, ax6 = plt.subplots(figsize=(width_cm / 2.54, height_cm / 2.54))
-    ax6.plot(Dt_values, variance_errors, linewidth=line_width)
+    ax6.plot(Dt_values, variance_errors_dt, linewidth=line_width)
     ax6.set_xlabel("Крок дискретизації", fontsize=font_size)
     ax6.set_ylabel("Дисперсія", fontsize=font_size)
     ax6.set_title(title_var, fontsize=font_size)
@@ -216,11 +319,11 @@ def main():
 
     save_figure(fig6, title_var, figures_dir, dpi_value)
 
-    # Графік співвідношення сигнал-шум від кроку дискретизації
+    # Графік співвідношення сигнал-шум від кроку дискретизації ПЗ-3
     title_snr = "Залежність співвідношення сигнал-шум від кроку дискретизації"
 
     fig7, ax7 = plt.subplots(figsize=(width_cm / 2.54, height_cm / 2.54))
-    ax7.plot(Dt_values, snr_ratios, linewidth=line_width)
+    ax7.plot(Dt_values, snr_ratios_dt, linewidth=line_width)
     ax7.set_xlabel("Крок дискретизації", fontsize=font_size)
     ax7.set_ylabel("ССШ", fontsize=font_size)
     ax7.set_title(title_snr, fontsize=font_size)
@@ -228,11 +331,96 @@ def main():
 
     save_figure(fig7, title_snr, figures_dir, dpi_value)
 
-    print("У папці figures збережено всі графіки.")
+    # ПРАКТИЧНА РОБОТА №4
+    quantized_signals = []
+    variance_errors_m = []
+    snr_ratios_m = []
+
+    for M in M_values:
+        n_bits = int(np.log2(M))
+
+        # Квантування
+        q_signal, q_index, delta, signal_min, signal_max = quantize_signal(filtered_signal, M)
+        quantized_signals.append(q_signal)
+
+        # Таблиця квантування
+        amplitudes, codes = build_quantization_table(M, signal_min, delta)
+        plot_quant_table(amplitudes, codes, M, figures_dir, width_cm, height_cm, font_size, dpi_value)
+
+        # Бітова послідовність
+        bit_sequence, bit_sequence_str = build_bit_sequence(q_index, n_bits)
+        plot_bit_sequence(bit_sequence, M, figures_dir, width_cm, height_cm, font_size, line_width, dpi_value)
+
+        # Похибка квантування
+        error = q_signal - filtered_signal
+        var_error = np.var(error)
+
+        if var_error == 0:
+            snr_value = np.inf
+        else:
+            snr_value = var_signal / var_error
+
+        variance_errors_m.append(var_error)
+        snr_ratios_m.append(snr_value)
+
+        print(f"\nM = {M}")
+        print(f"Крок квантування delta = {delta}")
+        print(f"Кількість біт n_bits = {n_bits}")
+        print(f"Довжина бітової послідовності = {len(bit_sequence)}")
+        print(f"Дисперсія похибки = {var_error}")
+        print(f"ССШ = {snr_value}")
+
+    # Загальний рисунок цифрових сигналів
+    title_quantized = "Цифрові сигнали для M = (4, 16, 64, 256)"
+
+    fig8, ax8 = plt.subplots(2, 2, figsize=(width_cm / 2.54, height_cm / 2.54))
+
+    s = 0
+    for i in range(2):
+        for j in range(2):
+            ax8[i][j].plot(t, filtered_signal, linewidth=line_width, label="Початковий сигнал")
+            ax8[i][j].step(t, quantized_signals[s], where="mid", linewidth=line_width, label=f"M={M_values[s]}")
+            ax8[i][j].grid(True)
+            ax8[i][j].legend(fontsize=8)
+            s += 1
+
+    fig8.supxlabel("Час (секунди)", fontsize=font_size)
+    fig8.supylabel("Амплітуда сигналу", fontsize=font_size)
+    fig8.suptitle(title_quantized, fontsize=font_size)
+
+    save_figure(fig8, title_quantized, figures_dir, dpi_value)
+
+    # Графік дисперсії для ПЗ 4
+    title_var_m = "Залежність дисперсії від кількості рівнів квантування"
+
+    fig9, ax9 = plt.subplots(figsize=(width_cm / 2.54, height_cm / 2.54))
+    ax9.plot(M_values, variance_errors_m, linewidth=line_width)
+    ax9.set_xlabel("Кількість рівнів квантування M", fontsize=font_size)
+    ax9.set_ylabel("Дисперсія", fontsize=font_size)
+    ax9.set_title(title_var_m, fontsize=font_size)
+    ax9.grid(True)
+
+    save_figure(fig9, title_var_m, figures_dir, dpi_value)
+
+    # Графік ССШ для ПЗ 4
+    title_snr_m = "Залежність співвідношення сигнал-шум від кількості рівнів квантування"
+
+    fig10, ax10 = plt.subplots(figsize=(width_cm / 2.54, height_cm / 2.54))
+    ax10.plot(M_values, snr_ratios_m, linewidth=line_width)
+    ax10.set_xlabel("Кількість рівнів квантування M", fontsize=font_size)
+    ax10.set_ylabel("ССШ", fontsize=font_size)
+    ax10.set_title(title_snr_m, fontsize=font_size)
+    ax10.grid(True)
+
+    save_figure(fig10, title_snr_m, figures_dir, dpi_value)
+
+    print("\nУ папці figures збережено всі графіки.")
     print("Кроки дискретизації Dt:", Dt_values)
-    print("Дисперсія початкового (відфільтрованого) сигналу:", var_signal)
-    print("Дисперсії різниці (похибки):", variance_errors)
-    print("Співвідношення сигнал-шум (ССШ):", snr_ratios)
+    print("Дисперсії різниці для ПЗ 3:", variance_errors_dt)
+    print("ССШ для ПЗ 3:", snr_ratios_dt)
+    print("Рівні квантування M:", M_values)
+    print("Дисперсії похибки для ПЗ 4:", variance_errors_m)
+    print("ССШ для ПЗ 4:", snr_ratios_m)
 
 
 if __name__ == "__main__":
